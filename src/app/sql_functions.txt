@@ -1,0 +1,58 @@
+CREATE OR REPLACE FUNCTION get_users_without_mfa()
+RETURNS SETOF auth.users AS $$
+BEGIN
+    RETURN QUERY
+    SELECT u.id AS user_id, u.email
+    FROM auth.users u
+    WHERE u.id NOT IN (
+        SELECT DISTINCT user_id
+        FROM auth.mfa_factors
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION public.get_tables_with_rls_disabled()
+RETURNS TABLE(table_name text) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        relname::text AS table_name
+    FROM
+        pg_class
+    WHERE
+        relkind = 'r' -- Ordinary tables
+        AND relrowsecurity = false
+        AND relnamespace = (
+            SELECT oid FROM pg_namespace WHERE nspname = 'public'
+        );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+CREATE OR REPLACE FUNCTION public.is_pitr_enabled()
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    wal_level text;
+    archive_mode text;
+    archive_command text;
+    max_wal_senders integer;
+BEGIN
+    SELECT 
+        (SELECT setting FROM pg_settings WHERE name = 'wal_level'),
+        (SELECT setting FROM pg_settings WHERE name = 'archive_mode'),
+        (SELECT setting FROM pg_settings WHERE name = 'archive_command'),
+        (SELECT setting FROM pg_settings WHERE name = 'max_wal_senders')::integer
+    INTO wal_level, archive_mode, archive_command, max_wal_senders;
+
+    IF (wal_level IN ('replica', 'logical')) AND
+       (archive_mode = 'on') AND
+       (archive_command IS NOT NULL AND archive_command <> '') AND
+       (max_wal_senders >= 1) THEN
+        RETURN true;
+    ELSE
+        RETURN false;
+    END IF;
+END;
+$$;
